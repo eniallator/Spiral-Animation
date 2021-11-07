@@ -1,52 +1,94 @@
-const canvas = document.getElementById('canvas')
-const ctx = canvas.getContext('2d')
-const imgData = ctx.createImageData(canvas.width, canvas.height)
+const canvas = document.getElementById("canvas");
+const ctx = canvas.getContext("2d");
 
-const spirals = [{ scale: 10, colour: [255, 0, 0] }, { scale: 15, colour: [0, 255, 0] }, { scale: 20, colour: [0, 0, 255] }]
+const spirals = [
+  { scale: 10, colour: [1, 0, 0] },
+  { scale: 15, colour: [0, 1, 0] },
+  { scale: 20, colour: [0, 0, 1] },
+];
 
-function getBearing(diff) {
-    const bearing = Math.atan(Math.abs(diff.y / diff.x))
+const mouse = new Mouse(canvas);
+const paramConfig = new ParamConfig(
+  "./config.json",
+  document.querySelector("#cfg-outer")
+);
+paramConfig.addCopyToClipboardHandler("#share-btn");
 
-    if (diff.x >= 0 && diff.y >= 0) {
-        // top right
-        return Math.PI * 0.5 - bearing
-    } else if (diff.x >= 0 && diff.y <= 0) {
-        // bottom right
-        return Math.PI * 0.5 + bearing
-    } else if (diff.x <= 0 && diff.y <= 0) {
-        // bottom left
-        return Math.PI * 1.5 - bearing
-    } else if (diff.x <= 0 && diff.y >= 0) {
-        // top left
-        return Math.PI * 1.5 + bearing
+const createSpirals = (time = 0) =>
+  tf.tidy(() => {
+    const xCoordsDist = tf
+      .range(0, canvas.width)
+      .tile([canvas.height])
+      .reshape([canvas.height, canvas.width])
+      .sub((canvas.width - 1) / 2);
+    const yCoordsDist = tf
+      .range(0, canvas.height)
+      .tile([canvas.width])
+      .reshape([canvas.width, canvas.height])
+      .transpose()
+      .sub((canvas.height - 1) / 2);
+    const magnitude = tf.sqrt(
+      tf.add(xCoordsDist.square(), yCoordsDist.square())
+    );
+    let bearing = tf.atan(tf.abs(yCoordsDist.div(xCoordsDist)));
+    const negativeBearing = bearing.mul(-1);
+
+    const xSign = xCoordsDist.greaterEqual(0);
+    const ySign = yCoordsDist.greaterEqual(0);
+    bearing = tf.where(
+      tf.logicalAnd(xSign, ySign),
+      negativeBearing.add(Math.PI * 0.5),
+      bearing
+    );
+    bearing = tf.where(
+      tf.logicalAnd(xSign, ySign.logicalNot()),
+      bearing.add(Math.PI * 0.5),
+      bearing
+    );
+    bearing = tf.where(
+      tf.logicalAnd(xSign.logicalNot(), ySign.logicalNot()),
+      negativeBearing.add(Math.PI * 1.5),
+      bearing
+    );
+    bearing = tf.where(
+      tf.logicalAnd(xSign.logicalNot(), ySign),
+      bearing.add(Math.PI * 1.5),
+      bearing
+    );
+    let imgData = tf.zeros([canvas.height, canvas.width, 3]);
+    for (let spiral of spirals) {
+      const wave = tf.abs(
+        tf.sin(
+          magnitude
+            .div(spiral.scale * paramConfig.getVal("scale"))
+            .add(bearing)
+            .sub(time)
+        )
+      );
+      imgData = imgData.add(
+        wave
+          .reshape([...wave.shape, 1])
+          .mul(tf.tensor(spiral.colour).reshape([1, 1, 3]))
+      );
     }
-}
+    return tf.keep(imgData.minimum(1));
+  });
 
+window.onresize = (evt) => {
+  canvas.width = $("#canvas").width();
+  canvas.height = $("#canvas").height();
+};
+window.onresize();
+
+let imgData;
+let time = 0;
 function run() {
-    for (let y = 0; y < canvas.height; y++) {
-        for (let x = 0; x < canvas.width; x++) {
-            const pix = (y * canvas.width + x) * 4
-            const diffVector = { x: canvas.width / 2 - x, y: canvas.height / 2 - y }
-            const bearing = getBearing(diffVector)
-            const magnitude = Math.sqrt(diffVector.x ** 2 + diffVector.y ** 2)
+  tf.disposeVariables();
+  imgData?.dispose();
+  time += 0.05;
+  imgData = createSpirals(time);
 
-            const colour = new Array(3).fill(0)
-            for (let spiral of spirals) {
-                for (let i in spiral.colour) {
-                    colour[i] += spiral.colour[i] * Math.abs(Math.sin(magnitude / spiral.scale + bearing))
-                }
-            }
-
-            for (let i of colour) colour[i] = Math.min(colour[i], 255)
-
-            imgData.data[pix] = colour[0]
-            imgData.data[pix + 1] = colour[1]
-            imgData.data[pix + 2] = colour[2]
-            imgData.data[pix + 3] = 255
-        }
-    }
-
-    ctx.putImageData(imgData, 0, 0)
+  tf.browser.toPixels(imgData, canvas).then(() => requestAnimationFrame(run));
 }
 
-run()
+paramConfig.onLoad(run);
