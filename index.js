@@ -7,7 +7,6 @@ const spirals = [
   { scale: 20, colour: [0, 0, 1] },
 ];
 
-const mouse = new Mouse(canvas);
 const paramConfig = new ParamConfig(
   "./config.json",
   document.querySelector("#cfg-outer")
@@ -82,13 +81,13 @@ window.onresize();
 
 let imgData;
 let time = 0;
-function run() {
+const run = () => {
   tf.disposeVariables();
   imgData?.dispose();
-  time += 0.05;
+  time += paramConfig.getVal("speed");
   imgData = createSpirals(time);
 
   tf.browser.toPixels(imgData, canvas).then(() => requestAnimationFrame(run));
-}
+};
 
 paramConfig.onLoad(run);
